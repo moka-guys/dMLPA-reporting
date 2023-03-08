@@ -39,7 +39,10 @@ RUN tlmgr install framed && \
 	tlmgr install parskip && \
 	tlmgr install fancyhdr && \
 	tlmgr install lastpage && \
-	tlmgr install xcolor
+	tlmgr install xcolor && \
+	tlmgr install fp && \
+	tlmgr install ms && \
+	tlmgr install pgf
 
 # set CRAN mirror
 RUN echo 'options(repos=structure(c(CRAN="http://cran.ma.imperial.ac.uk/")))' > /root/.Rprofile
