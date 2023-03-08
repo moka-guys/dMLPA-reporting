@@ -48,194 +48,51 @@
 \renewcommand{\sectionmark}[1]{\markright{#1}}
 \fancyhf{}
 
+% add version number to header
 <<headnote, echo=FALSE, message=FALSE, results='asis' >>=
-cat(paste(c("\\lhead{dMPLA ",sanitize(versionstr),"}"),collate="",sep=""))
+cat(paste(c("\\lhead{dMPLA-reporting ",sanitize(versionstr),"}"),collate="",sep=""))
 @
 
 \rhead{\rightmark}
 \lfoot{\today}
 \rfoot{Page \thepage\ of \pageref{LastPage}}
 
-
-%%
-%%  CONTINUE HERE
-%%
-
-
 % DOCUMENT
 \begin{document}
 \maketitle
-\textbf{Panel:} \Sexpr{sanitize(panel[2])}
-(\Sexpr{sanitize(panel[1])}) \\
-\textbf{Genes:} \Sexpr{paste(selected.genes[order(selected.genes)],collapse=", ")}
-(\Sexpr{sanitize(length(coveredexons@ranges))} exons) \\
-\textbf{Reference genome:} \Sexpr{paste(basename(referenceFasta))} \\
-\textbf{Normalisation methods:} \Sexpr{paste(rev(names(results)))} \\
-\textbf{Transition probability:} \Sexpr{paste(threshold)} \\
-\textbf{QC configuration:} \Sexpr{sanitize(basename(extras))}
+\textbf{Panel:} \Sexpr{sanitize(panel)} \\
+\textbf{Genes:} \Sexpr{gene_list}
 \\
 
 <<functions, echo=FALSE, message=FALSE>>=
-# FUNCTIONS
-summarizeAnnotation<-function(extrastring) {
-  if (is.na(extrastring)) return("")
-  a<-unique(unlist(strsplit(extrastring, '[,]')))
-  linebreak(paste(a,collapse='\n'))
-}
-summarizeGene<-function(exonstring) {
-  if (is.na(exonstring)) return('Not in ROI')
-  exons<-unlist(strsplit(exonstring, '[,]'))
-  genes<-unique(sapply(strsplit(exons ,'_'),"[[",1))
-  genex<-vector()
-  for (gene in genes) {
-    exonnumbers<-sort(as.numeric(sapply(strsplit(exons[startsWith(exons,paste(gene,"_",sep=""))],'_'),"[[",2)))
-    if (length(exonnumbers)>1 && diff(range(exonnumbers))==(length(exonnumbers)-1)) {
-      exonnumbers<-paste(range(exonnumbers),collapse='-')
-    }
-    e<-paste(exonnumbers,collapse=",")
-    genex<-append(genex,paste(gene,' (',e,')',sep=""))
-  }
-  linebreak(paste(genex,collapse='\n'))
-}
-not.na<-function(x) !is.na(x)
-CNVconfidence<-function(cnvs) {
-  ifelse(cnvs$reads.expected<50 | (cnvs$reads.ratio>0.75 & cnvs$reads.ratio<1.25),"LOW","HIGH")
-}
+# returns Boolean if all QC measures are passed
+qcPassed <- !any(
+    metadata[which(metadata[,1] == "Reference probe quality"), samplename] != "Ok",
+    metadata[which(metadata[,1] == "Quality checks"), samplename] != "Passed")
+
+# prints QC warning banner
 qcWarning<-function() {
+  cat("\\\\")
   cat("\\begin{warning}\n")
   cat("\\begin{quote}\n")
   cat("\\textbf{One or more QC measures have exceeded set thresholds. Check QC report!}\n")
   cat("\\end{quote}\n")
   cat("\\end{warning}\n")
 }
+
+# plots the metadata (QC) table
 qcTable<-function() {
-  message("Generating QC table...")
-  # split QC table in 3 sections
-  qc_tables<-list()
-  for (i in 1:length(qc)) {
-    rs <- names(qc)[i]
-    message(paste(i,rs))
-    if (i==1) {
-      # extract batch stats
-      qc_tables[["Intra-batch comparison"]]<-qc[[i]][1:4,]
-    }
-    table_name<-paste0("Reference set statistics (",toupper(names(qc)[i]),")")
-    qc_tables[[table_name]]<-qc[[i]][5:nrow(qc[[i]]),]
-  }
-
-  for (rs in rev(names(qc_tables))) {
-    cat(paste0("\\subsubsection*{",rs,"}\n"))
-    cat('\n')
-    # build footnote (explanations)
-    fnotes<-NA #c("No warnings issued. QC passed.")
-    ftitle<-""
-    if (any(qc_tables[[rs]]$status%in%c("FAIL","CAUTION"))) {
-      fnotes<-vector()
-      ftitle<-"Warning:"
-      failed<-rownames(qc_tables[[rs]])[which(qc_tables[[rs]]$status%in%c("CAUTION","FAIL"))]
-      if ("Median correlation in batch"%in%failed || "Maximum correlation in batch"%in%failed) {
-        fnotes<-append(fnotes,
-          "The sample has a low RPKM correlation within the batch which likely indicates a failed sample.")
-      }
-      if ("Coefficient of variation (CV)"%in%failed) {
-        fnotes<-append(fnotes,
-          "High coefficient of variation within sample (scatter). Check for batch effect.")
-      }
-      if ("CV Z-score within batch"%in%failed) {
-        fnotes<-append(fnotes,
-          "High coefficient of variation in relation to batch.")
-      }
-      if ("Correlation with reference"%in%failed) {
-        fnotes<-append(fnotes,
-          "Expect a higher false positive rate and reduced sensitivity due to low correlation with reference set.")
-      }
-      if ("Size of reference set"%in%failed) {
-        fnotes<-append(fnotes,
-          "The low number of reference samples could limit assay sensitivity if they contain the same alterations!")
-      }
-      if ("Forced minimum reference set size"%in%failed) {
-        fnotes<-append(fnotes,c(
-          "The size of the reference set was adjusted to be greater than 1 to preserve specificity,",
-          "  check selected reference samples for expected BF and correlation."))
-      }
-      if ("Expected BF with reference"%in%failed) {
-        fnotes<-append(fnotes,
-          "The expected BF for the chosen reference is low, indicating limited power of the statistical model.")
-      }
-    }
-    print(
-      kbl(qc_tables[[rs]],escape=T,booktabs=T) %>%
+  print(
+    kbl(metadata, escape=T, booktabs=T) %>%
       kable_styling(latex_options = "hold_position", font_size=7) %>%
-      row_spec(which(qc_tables[[rs]]$status=="FAIL"), bold = T, color = "white", background = "red") %>%
-      row_spec(which(qc_tables[[rs]]$status=="PASS"), background = "green") %>%
-      row_spec(which(qc_tables[[rs]]$status=="CAUTION"), color = "white", background = "orange") %>%
-      { if (!is.na(fnotes)) footnote(., general=paste(fnotes), general_title=ftitle) else . }
-    )  
-  }
-}
-refsampleTable<-function(ref) {
-  message('Generating reference sample table...')
-  for (rs in rev(names(ref))) {
-    cat(paste0("\\subsubsection*{Reference sample choice (",toupper(rs),")}"))
-    message(paste('Building refset table for',rs))
-    # calculate correlations
-    refsample.table<-ref[[rs]]$summary.stats
-    rs.table<-refsample.table[1:which(refsample.table$selected),c('expected.BF','phi','RatioSd','median.depth','correlations')]
-
-    cat("\\begin{scriptsize}")
-    # Print warning
-    fnotes<-""
-    ftitle<-""
-
-    if (any(!is.na(sexMismatch[[rs]]))) {
-      smm<-any(sexMismatch[[rs]])
-      if (is.na(smm)) {
-        ftitle<-"Warning:"
-        fnotes<-"Could not confirm sex match for full reference set. CNV calls on sex chromosomes could be unreliable!"
-      } else if (smm) {
-        ftitle<-"Warning:"
-        fnotes<-"Mismatched sex in reference set. CNV calls on sex chromosomes will be unreliable!"
-      } else {
-        fnotes<-"Reference set is sex-matched."
-      }
-    } else {
-      ftitle<-"Note:"
-      fnotes<-"No Sex match performed"
-    }
-    print(
-      kbl(rs.table, booktabs=TRUE) %>%
-      row_spec(which(sexMismatch[[rs]]), bold = T, color = "white", background = "red") %>%
-      row_spec(which(!sexMismatch[[rs]]), background = "green") %>%
-      row_spec(which(is.na(sexMismatch[[rs]])), background = "white") %>%
-      footnote(general=fnotes, general_title=ftitle)
-    )
-    cat("\\end{scriptsize}")
-  }
-}
-
-# print the low coverage table (if any)
-lowCoverageExons<-function(pagerows=70) {
-  if (nrow(coverage.table)>0) {
-    cat(paste0("Low coverage could reduce CNV detection sensitivity. Regions with median below ",limits$coverage,"x coverage:\\\\"))
-    cat("\\begin{scriptsize}")
-    subtables<-ceiling(nrow(coverage.table)/pagerows)
-    for (i in 1:subtables) {
-      startrow<-((i-1)*pagerows)+1
-      endrow<-min(nrow(coverage.table), i*pagerows)
-      print(kbl(
-                coverage.table[startrow:endrow,], 
-                row.names=FALSE, 
-                format='latex', 
-                booktabs=TRUE))
-    }
-    cat("\\end{scriptsize}")
-  } else {
-    cat(paste0("Median coverage exceeds ",limits$coverage,"x in all target regions."))
-  }
+      row_spec(which(metadata[,samplename]%in%c("Fail")), bold = T, color = "white", background = "red") %>%
+      row_spec(which(metadata[,samplename]%in%c("Passed", "Ok")), background = "green") %>%
+      { if (qcPassed) footnote(., general=paste("All QC passed"), general_title="TITLE") else . }
+  )
 }
 
 # prints the CNV summary table
-CNVtable<-function(cnvtable,footer) {
+cnvSummary<-function() {
   footnotes=c(
     "¹The Bayes Factor (BF) is a measure of strength of evidence of the alternate hypothesis (copy number change)",
     " over the null hypothesis (no alteration). CNVs with negative Bayes Factor were omitted.",
@@ -246,16 +103,28 @@ CNVtable<-function(cnvtable,footer) {
     "°minimum 10% CNV overlap.")
   cat("\\begin{scriptsize}")
   print(
-    kbl(cnvtable, escape=FALSE, row.names=FALSE, format='latex', booktabs=TRUE) %>%
-    row_spec(2:nrow(cnvtable)-1,hline_after=TRUE) %>%
+    kbl(cna_summary, escape=FALSE, row.names=FALSE, format='latex', booktabs=TRUE) %>%
+    row_spec(2:nrow(cna_summary)-1,hline_after=TRUE) %>%
     row_spec(0,bold=TRUE) %>%
-    { if(footer) footnote(., general=paste(footnotes), general_title="") else . }
+    footnote(., general=paste(footnotes), general_title="")
   )
   cat("\\end{scriptsize}\n")
 }
 
+cnvProbes <- function(cnv) {
+  cat("\\begin{scriptsize}")
+  # TODO: print only selected columns (notes, probes, copy number change, expected copy number, ...?)
+  print(
+    kbl(cnv, escape=FALSE, row.names=FALSE, format='latex', booktabs=TRUE) %>%
+    row_spec(2:nrow(cnv)-1,hline_after=TRUE) %>%
+    row_spec(0,bold=TRUE)
+  )
+  cat("\\end{scriptsize}\n")
+}
+
+#### THIS NEEDS CHANGING/SIMPLIFYING ####
 # plots the CNV copy number graphs
-multiPlotCNVs<-function(res,cnvs,extend=1000) {
+cnvPlot <- function(res, cnvs, extend=1000) {
   # reorder and remove BF<0
   annot<-res[[1]]@annotations
   .pardefault<-par(no.readonly=TRUE)  # save plot environment
@@ -467,145 +336,63 @@ multiPlotCNVs<-function(res,cnvs,extend=1000) {
   par(.pardefault) # restore plot environment
 }
 
-plotRefsampleStats<-function() {
-  # cat("\\subsubsection*{Intra-batch statistics}\n")
-  # plotting colours
-  highlight.col<-ifelse(colnames(batch.cor)==testsample,'hotpink','gray')
-  highlight.pch<-ifelse(colnames(batch.cor)==testsample,19,1)
-  bordercolour<-ifelse(colnames(batch.cor)==testsample,'black','snow4')
-  cat("\\begin{multicols}{2}\n")
-  # Correlation plot
-  boxplot(batch.cor, xaxt="n", col=highlight.col, border=bordercolour)
-  abline(h=limits$medcor[2],col=c("red"),lty=2)
-  title(main="Correlation within batch")
-  mtext("Note: Low correlation within batch could be due to high number of CNAs. Check set limits.",1)
-  # Coeff of variation plot
-  keep.finite<-function(X) X[is.finite(X)]
-  ymin<-min(keep.finite(c(limits$coeffvar,batch.cv)))
-  ymax<-max(keep.finite(c(limits$coeffvar,batch.cv)))
-  margin<-(ymax-ymin)*0.1
-  # generate plot surface
-  plot(batch.cv, xaxt="n", xlab=NA, ylab=NA, ylim=c(ymin-margin,ymax+margin), type="n")
-  # get areas
-  if (!all(is.null(limits$cvzscore))) {
-    if (!is.na(limits$cvzscore[1])) {
-      rect(par("usr")[1], batch.mean+(limits$cvzscore[1]*batch.sd), par("usr")[2], par("usr")[4], density=10, col='chartreuse3')
-    }
-    if (!is.na(limits$cvzscore[2])) {
-      rect(par("usr")[1], batch.mean+(limits$cvzscore[2]*batch.sd), par("usr")[2], par("usr")[4], density=10, col='red')
-    }
+cnvDetails<-function() {
+  for (c in 1:length(cna_detail)) {
+    # print section header
+    gene_symbol <- unique(cna_detail[[c]]$Gene)
+    cat("\\subsubsection*{CNV\\_", c, " (", gene_symbol, ")}\n", sep="")
+
+    # plot CNV
+    # cnvPlot(cna_detail[[c]])
+
+    # subset to CNV rows and relevant columns
+    cnv_probes_sanitized <- cna_detail[[c]][which(cna_detail[[c]]$marked_cnv), c(2, 4, 5, 9, 11, 10)]
+    # sanitize column names for LaTeX
+    cnv_probes_colnames <- colnames(cnv_probes_sanitized)
+    cnv_probes_colnames[which(cnv_probes_colnames == samplename)] <- "Change"
+    colnames(cnv_probes_sanitized) <- sanitize(cnv_probes_colnames)
+
+    # plot probe table with notes
+    cnvProbes(cnv_probes_sanitized)
   }
-  # mark thresholds
-  for (l in limits$coeffvar) {
-    if (!is.na(l)) abline(h=l, col=ifelse(l==max(limits$coeffvar),"red","chartreuse3"), lty=2)
-  }
-  # for (band in cvz.bands) rect(0,band[1],length(batch.cv)+1,band[2],lty=0,col=rgb(0,0,1,alpha=0.05))
-  points(batch.cv, col=highlight.col, pch=highlight.pch)
-  mtext("Note: Dashed lines are fixed limits. Shaded bands are derived from variation within batch (SD)",1)
-  title(main="Coefficient of variation")
-  # END MULTICOLUMN
-  cat("\\end{multicols}\n")
 }
 @
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Build PDF document %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Build PDF document by calling above functions %%%%%%%%%%%%%%%%%%%%%%%%%%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 <<table, size='footnotesize', results='asis', echo=FALSE, message=FALSE, fig.width=9, fig.height=4, out.width='1.0\\linewidth' >>=
-# NB Assay info header printed above
-# Sample header
 cat(paste0('\\section{',sanitize(samplename),'}'))
-cat(paste0('\\textbf{Filename: }',sanitize(testsample)))
-# qc check (indicates that a QC measure has failed)
-failedQC<-any(unlist(lapply(qc, function(x) x$status!="PASS")))
-failedCoverage<-nrow(coverage.table)>0
-failedSexmatch<-any(unlist(lapply(sexMismatch, function(x) !any(is.na(x)) && any(x))))
-if (failedQC || failedCoverage || failedSexmatch) {
-  cat("\\\\")
-  qcWarning()
-}
+cat(paste0('\\textbf{Filename: }',sanitize(infile)))
 
+# QC check and warning banner
+if (!qcPassed) qcWarning()
 
-# CNV results
+# CNV summary table
 cat("\\subsection*{Called CNVs}")
-# print CNV tables
-cnvloc<-data.frame()
-for (rs in rev(names(results))) {
-  cat(paste0("\\subsubsection*{",toupper(rs)," normalisation}"))
-  if (class(results[[rs]])!="ExomeDepth") {
-    cat('\n\n\n')
-    cat("\\textbf{NO CNVs CALLED IN REGION OF INTEREST.}")
-  } else {
-    cnvs<-results[[rs]]@CNV.calls
-    # match CNVs between refsets
-    cnv_match <- list()
-    match_col <- vector()
-    for (crs in names(results)) {
-      if (crs!=rs) {
-        match_col <- append(match_col, crs)
-        cnv_merged<-cnvs %>% left_join(results[[crs]]@CNV.calls,
-          by=c('start.p','end.p'))
-        cnv_match[[crs]]<-ifelse(!is.na(cnv_merged$chromosome.y),"\\checkmark","")
-      }
-    }
-    cnvs <- cbind(cnvs, data.frame(cnv_match))
-    # filter CNVs (sort by BF and remove negative BF and unannotated)
-    cnvs<-cnvs[order(cnvs$BF, decreasing = TRUE),]
-    cnvs<-cnvs[which(cnvs$BF>0),]
-    cnvs<-cnvs[which(not.na(cnvs$exons.hg19)),]
-    # render CNV data
-    if (!!nrow(cnvs)) {
-      # reformat metadata and annotate
-      cnvs[,'genes']<-unlist(lapply(cnvs[,'exons.hg19'],summarizeGene))
-      cnvs[,'confidence']<-CNVconfidence(cnvs)
-      # add empty annotation if none set
-      hasAnnotation<-"annotation"%in%colnames(cnvs)
-      if (hasAnnotation) {
-        # deduplicate and replace NA with empty string
-        cnvs[,'annotation']<-unlist(lapply(cnvs[,'annotation'],summarizeAnnotation))
-      } else {
-        # make all annotations an empty string instead of plotting NA
-        cnvs[,'annotation']<-""
-      }
-
-      # combine cnvs (add source)
-      cnvloc<-rbind(cnvloc,
-        cbind(cnvs[,c("chromosome","start","end","exons.hg19","type")], source=rs))
-
-      # create CNV table
-      cnvtable<-cnvs[,c('id','BF','reads.expected','reads.ratio',
-                        'type','genes','confidence','annotation',match_col)]
-      colnames(cnvtable)<-c('id','BF¹','expected','ratio',
-                            'type','genes²','confidence³','annotation°',match_col)
-      # make column names shorter
-      add_footer<-which(rev(names(results))==rs)==length(results)
-      CNVtable(cnvtable, add_footer)
-    } else {
-      cat('\n\n\n')
-      cat("\\textbf{NO CNVs CALLED IN REGION OF INTEREST WITH.}\n")
-    }
-  }
+# print CNV summary table
+if (!!nrow(cna_summary)) {
+  cnvSummary()
+} else {
+  cat('\n\n\n')
+  cat("\\textbf{NO CNVs CALLED IN REGION OF INTEREST.}\n")
 }
 
-# Print coverage plots
+# Print coverage plots and detail tables (for each CNV)
 cat('\\newpage\n')
-cat("\\subsubsection*{Coverage plots}\n")
-cat("\\begin{multicols*}{2}\n")
-multiPlotCNVs(results, unique(cnvloc[,1:5]))
-cat("\\end{multicols*}\n")
+cat("\\subsection*{CNV Details}\n")
+# cat("\\begin{multicols*}{2}\n")
+cnvDetails()
+# cat("\\end{multicols*}\n")
+
+
 # Print QC stuff
 cat('\\newpage\n')
 cat("\\subsection*{Quality Control}\n")
 qcTable()
-plotRefsampleStats()
-refsampleTable(refsets[[testsample]])
 
 save.image()
-
-# plot lowCoverageExons
-cat("\\subsubsection*{Coverage limitations}\n")
-lowCoverageExons()
 @
 
 \end{document}

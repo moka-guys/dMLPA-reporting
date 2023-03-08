@@ -5,12 +5,10 @@ FROM rstudio/r-base:4.2.1-focal
 LABEL base.image="r-base:4.2.1"
 LABEL software="dMLPA-reporting"
 LABEL description="dMLPA report generation"
+LABEL maintainer="David Brawand <dbrawand@nhs.net>"
 LABEL website="https://github.com/moka-guys/dMLPA-reporting"
 LABEL documentation="https://github.com/moka-guys/dMLPA-reporting"
 LABEL license="https://github.com/moka-guys/dMLPA-reporting"
-
-# Maintainer
-MAINTAINER David Brawand <dbrawand@nhs.net>
 
 # set working directory
 WORKDIR /root
@@ -47,12 +45,14 @@ RUN tlmgr install framed && \
 RUN echo 'options(repos=structure(c(CRAN="http://cran.ma.imperial.ac.uk/")))' > /root/.Rprofile
 
 # R packages (BioC)
-RUN Rscript -e "install.packages('BiocManager');BiocManager::install(version = '3.15')" && \
+RUN Rscript -e "install.packages('BiocManager');BiocManager::install(version = '3.15', ask = FALSE)" && \
 	Rscript -e "BiocManager::install(c('Biostrings','IRanges','Rsamtools','GenomicRanges','GenomicAlignments'))"
 
 # R packages (CRAN)
 RUN Rscript -e "install.packages('optparse')" && \
     Rscript -e "install.packages('readxl')" && \
+    Rscript -e "install.packages('stringr')" && \
+    Rscript -e "install.packages('dplyr')" && \
     Rscript -e "install.packages('knitr')" && \
     Rscript -e "install.packages('kableExtra')" && \
     Rscript -e "install.packages('tinytex')" && \

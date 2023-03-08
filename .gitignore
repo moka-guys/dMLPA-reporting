@@ -1,1 +1,7 @@
+VERSION
 .DS_Store
+.RData
+.Rhistory
+*.tex
+*.pdf
+test/*
