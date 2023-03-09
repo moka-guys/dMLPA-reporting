@@ -19,8 +19,6 @@ for (p in required_packages) {
   if (!require(p, warn.conflicts = FALSE, character.only = TRUE)) {
     install.packages(p, dependencies = TRUE)
     library(p, warn.conflicts = FALSE, character.only = TRUE)
-  } else {
-    print(p)
   }
 }
 

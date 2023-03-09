@@ -124,215 +124,148 @@ cnvProbes <- function(cnv) {
 
 #### THIS NEEDS CHANGING/SIMPLIFYING ####
 # plots the CNV copy number graphs
-cnvPlot <- function(res, cnvs, extend=1000) {
-  # reorder and remove BF<0
-  annot<-res[[1]]@annotations
-  .pardefault<-par(no.readonly=TRUE)  # save plot environment
-  if (nrow(cnvs)>0) {
-    for (i in 1:nrow(cnvs)) {
-      message(paste(cnvs[i,],collapse=' '))
-      message('--------------\n')
-      # get gene limits
-      chrom<-cnvs[i,'chromosome']
-      chromStart<-cnvs[i,'start']
-      chromEnd<-cnvs[i,'end']
-      cnvType<-cnvs[i,"type"]
-      genes<-as.character(unique(annot[which(annot$chromosome==chrom & 
-        annot$end>chromStart & annot$start<chromEnd),'name']))
-      if (length(genes)>0) {
-          start<-min(annot[which(annot$name%in%genes),'start']) - extend
-          end<-max(annot[which(annot$name%in%genes),'end']) + extend
-      } else {
-          start<-cnvs[i,'start'] - extend
-          end<-cnvs[i,'end'] + extend
-      }
-      # get gene and exon names
-      e<-unlist(strsplit(as.character(cnvs[i,'exons.hg19']),'[,]'))
-      g<-unique(sapply(strsplit(as.character( e ),'_'),"[[",1))
-      gene_names <- paste(g, collapse=",")
+cnvPlot <- function(cnv, plot_title="", extend=1000) {
+  # save plot environment
+  .pardefault<-par(no.readonly=TRUE)
+      
+  # make a tibble and rename ratio column
+  cnv <- rename(as_tibble(cnv), all_of(c("Ratio" = samplename)))
+  
+  # add approximate, dislocated position in bases (spread probes with same PosKb slightly)
+  colocated_probe_offset<-1000/max(table(cnv$PosKb))
+  adjusted_positions<-c(-1,diff(cnv$PosKb))==0
+  offset_multiplier<-0
+  PosEst<-vector()
+  for (i in 1:length(cnv$PosKb)) {
+    PosEst[i] <- 1000 * cnv$PosKb[i]
+    if (adjusted_positions[i]) {
+      offset_multiplier <- offset_multiplier + 1
+      PosEst[i] <- PosEst[i] + (offset_multiplier * colocated_probe_offset)
+    } else {
+      offset_multiplier <- 0
+    }
+  }
+  cnv<-cbind(cnv, PosEst)
 
-      #
-      # get annotation from first result object (their annotations are identical)
-      #
-      anno<-list()
-      for (rs in names(res)) {
-        anno[[rs]] <- res[[rs]]@annotations
-        selected <- which(anno[[rs]]$chromosome == chrom &
-            anno[[rs]]$start >= start & anno[[rs]]$end <= end & 
-            (res[[rs]]@test + res[[rs]]@reference) * res[[rs]]@expected > 100)
-        if (length(selected) == 0) {
-            warning("No exon seem to be located in the requested region.
-              It could also be that the read count is too low for these exons? 
-              In any case no graph will be plotted.")
-            next
-        }
-        # select relevant exons
-        anno[[rs]] <- anno[[rs]][selected, ]
-        # get expected count
-        anno[[rs]]$expected <- res[[rs]]@expected[selected]
-        # get proportion of test coverage
-        anno[[rs]]$freq <- res[[rs]]@test[selected]/(
-          res[[rs]]@reference[selected] + res[[rs]]@test[selected])
-        # get middle of exons (x-axis)
-        anno[[rs]]$middle <- 0.5 * (anno[[rs]]$start + anno[[rs]]$end)
-        # get reads ratio (y-axis)
-        anno[[rs]]$ratio <- anno[[rs]]$freq/anno[[rs]]$expected
-        # add test count
-        anno[[rs]]$test <- res[[rs]]@test[selected]
-        # add reference count
-        anno[[rs]]$reference <- res[[rs]]@reference[selected]
-        # add total.counts
-        anno[[rs]]$total.counts <- anno[[rs]]$test + anno[[rs]]$reference
-        # add dispersion
-        anno[[rs]]$phi <- ifelse(length(res[[rs]]@phi) == 1, res[[rs]]@phi, res[[rs]]@phi[selected])
-        # confidence bands
-        for (i in 1:nrow(anno[[rs]])) {
-          anno[[rs]]$my.min.norm[i] <- qbetabinom(p = 0.025, size = anno[[rs]]$total.counts[i],
-            phi = anno[[rs]]$phi[i], prob = anno[[rs]]$expected[i])
-          anno[[rs]]$my.max.norm[i] <- qbetabinom(p = 0.975, size = anno[[rs]]$total.counts[i],
-            phi = anno[[rs]]$phi[i], prob = anno[[rs]]$expected[i])
-        }
-        anno[[rs]]$my.min.norm.prop <- anno[[rs]]$my.min.norm/anno[[rs]]$total.counts
-        anno[[rs]]$my.max.norm.prop <- anno[[rs]]$my.max.norm/anno[[rs]]$total.counts
-      }
+  # get gene and plot limits (x-axis)
+  gene <- unique(cnv$Gene)
+  chrom <- unique(cnv$Chrom)
+  start <- min(cnv$PosEst) - extend
+  end <- max(cnv$PosEst) + extend
 
-      #
-      # setup plot layout
-      #
-      panels <- length(anno)
-      heights <- c(rep(2,panels), 1)
-      xlim <- c(start, end)
-      # setup plotting panels (panels+gene)
-      mat <- matrix(data = 1:(panels+1), nrow = panels+1, ncol = 1)
-      layout(mat = mat, widths = rep(1, panels+1), heights = heights)
+  #
+  # setup plot layout
+  #
+  heights <- c(2, 1)
+  xlim <- c(start, end)
+  ylim <- c(0, 1.25 * max(cnv$Ratio))
+  # setup plotting panels (stacked atio plot & gene structure)
+  mat <- matrix(data = 1:2, nrow = 2, ncol = 1)
+  layout(mat = mat, widths = rep(1, 2), heights = heights)
 
-      #
-      # Create read ratio plots
-      #
-      fmt_bg <- c('#FF000080', '#0000FF80')
-      fmt_fg <- c('red', 'blue')
-      fmt_an <- c(45, 135)
-      fmt_de <- c(20, 20)
-      for (rs in rev(names(anno))) {
-        fmt_idx <- which(rs==rev(names(anno)))
-        ylim <- c(0, max(anno[[rs]]$ratio,
-          1.25 * max(anno[[rs]]$my.max.norm.prop/anno[[rs]]$expected, na.rm = TRUE)))
+  #
+  # Create read ratio plot
+  #
 
-        # adjust margin
-        if (fmt_idx==1) {
-          par(mar = c(0, 4, 2, 2))
-        } else {
-          par(mar = c(1, 4, 1, 2))
-        }
+  # formatting options
+  fmt_bg <- '#0000FF80'
+  fmt_fg <- 'blue'
+  fmt_an <- c(135)
+  fmt_de <- c(20)
+      
+  # adjust margin
+  # par(mar = c(0, 4, 2, 2))
+  par(mar = c(1, 4, 1, 2))
 
-        # base plot
-        plot(x = NA, y = NA, ylim = ylim, xlim = xlim, ylab = paste("ratio",toupper(rs)),
-          xaxt = "n", main = ifelse(fmt_idx==1, gene_names, ""))
+  # base plot
+  plot(x = NA, y = NA, ylim = ylim, xlim = xlim, ylab = "ratio", xaxt = "n",
+    main = plot_title)
 
-        # normal range band
-        polygon(x = c(anno[[rs]]$middle, rev(anno[[rs]]$middle)),
-          y = c(
-            anno[[rs]]$my.min.norm.prop,
-            rev(anno[[rs]]$my.max.norm.prop)
-          ) / c(anno[[rs]]$expected, rev(anno[[rs]]$expected)),
-          col = fmt_bg[fmt_idx], angle=fmt_an[fmt_idx], density=fmt_de[fmt_idx], border = NA)
+  # determine and plot normal range band
+  normal_ratio_range <- c(cnchange[['down']][2], cnchange[['up']][1])
+  rect(start, normal_ratio_range[1], end, normal_ratio_range,
+    col = fmt_bg, angle=fmt_an, density=fmt_de, border = NA)
+
+  # reads ratios 
+  ## TODO: visualise refernce probes?
+  points(x = cnv$PosEst, y = cnv$Ratio, type = "b", pch = "+", col = fmt_fg)
         
-        # left margin range band
-        polygon(x = c(start, anno[[rs]]$middle[1], anno[[rs]]$middle[1], start),
-          y = c(
-            rep(anno[[rs]]$my.min.norm.prop[1], 2),
-            rep(anno[[rs]]$my.max.norm.prop[1], 2)
-          ) / anno[[rs]]$expected[1],
-          col = fmt_bg[fmt_idx], angle=fmt_an[fmt_idx], density=fmt_de[fmt_idx], border = NA)
-          # col = "grey", border = "grey")
-        
-        # right margin range band
-        nr <- nrow(anno[[rs]])
-        polygon(x = c(end, anno[[rs]]$middle[nr], anno[[rs]]$middle[nr], end),
-          y = c(
-            rep(anno[[rs]]$my.min.norm.prop[nr], 2),
-            rep(anno[[rs]]$my.max.norm.prop[nr], 2)
-          ) / anno[[rs]]$expected[nr],
-          col = fmt_bg[fmt_idx], angle=fmt_an[fmt_idx], density=fmt_de[fmt_idx], border = NA, lty = 1)
-          # col = "grey", border = "grey", lty = 1)
-        
-        # reads ratio
-        points(x = anno[[rs]]$middle[order(anno[[rs]]$middle)],
-          y = anno[[rs]]$ratio[order(anno[[rs]]$middle)],
-          type = "b", pch = "+", col = fmt_fg[fmt_idx])
-        
-        # add CNV overlay
-        cnv<-res[[rs]]@CNV.calls[which(chromStart == res[[rs]]@CNV.calls$start & 
-          chromEnd == res[[rs]]@CNV.calls$end),]
-        if (nrow(cnv)==1) {
-          cnvcolour<-ifelse(cnv$reads.ratio<1, '#FF000044', '#00FF0044')
-          rect(chromStart, ylim[1], chromEnd, ylim[2], col = cnvcolour,
-            border=cnvcolour,lwd=5)
-          text(cnv$end,0.7,pos=4,labels=cnv$BF) # annotate with Bayes Factor
-        }
-      }
+  # add CNV overlay
+  cnv_probes <- which(cnv$marked_cnv)
+  cnvStart <- min(cnv[cnv_probes, "PosEst"])
+  cnvEnd <- max(cnv[cnv_probes, "PosEst"])
+  # mark in red for deletions, green for anythin else
+  cnvcolour<-ifelse(mean(cnv[cnv_probes,"Ratio"] < 1), '#FF000044', '#00FF0044')
+  rect(cnvStart, ylim[1], cnvEnd, ylim[2],
+    col = cnvcolour, border=cnvcolour, lwd=5)
 
-      #
-      # plot gene data (take annotation from first result)
-      #
-      par(mar = c(2, 4, 0, 2))
-      plot(x = NA, y = NA, ylim = c(0, 1), xlim = xlim,
-          yaxt = "n", ylab = "", xlab = "", xaxt = "n")
-      # axis ticks at bottom
-      my.pos <- axTicks(side = 1)
-      axis(side = 1, at = my.pos, labels = as.integer(my.pos))
-      # get exons within range of plot
-      selected <- which(anno[[1]]$chromosome == chrom & anno[[1]]$start >=
-          xlim[1] & anno[[1]]$end <= xlim[2])
-      selected.2 <- max(min(selected) - 1, 1):min(max(selected) +
-          1, nrow(anno[[1]]))
-      exon.array <- anno[[1]][selected.2, , drop = FALSE]
-      exon.array$short.name <- gsub(exon.array$name, pattern = "-.*", replacement = "")
-      if (nrow(exon.array) > 1) {
-        if (exon.array$short.name[1] != exon.array$short.name[2]) {
-          exon.array <- exon.array[-1, ]
-        }
-        if (nrow(exon.array) > 1 && (exon.array$short.name[nrow(exon.array)] !=
-          exon.array$short.name[nrow(exon.array) - 1])) {
-          exon.array <- exon.array[-nrow(exon.array),]
-        }
-      }
-      exon.array$start.gene <- tapply(INDEX = exon.array$short.name,
-          exon.array$start, FUN = min)[exon.array$short.name]
-      exon.array$middle <- 0.5 * (exon.array$start + exon.array$end)
-      # print exons
-      if (nrow(exon.array) >= 1) {
-        pos <- 1
-        lev <- 0.4
-        arr <- by(exon.array, exon.array$start.gene, FUN = function(x) {
-          my.x <- range(x$middle)
-          lines(x = my.x, y = c(lev, lev))
-          my.x <- mean(range(x$middle))
-          if (my.x < xlim[1]) my.x <- xlim[1]
-          if (my.x > xlim[2]) my.x <- xlim[2]
-          # gene name
-          text(x = my.x, y = ifelse(lev == 0.6, 0.7, 0.3),
-            labels = x$short.name[1], pos = pos, cex = 0.5)
-          # exon ticks
-          for (i in 1:nrow(x)) {
-            lines(x = c(x$middle[i], x$middle[i]), y = c(lev - 0.1, lev + 0.1))
-          }
-          if (pos == 1) {
-            pos <<- 3
-            lev <<- 0.6
-          }
-          else {
-            pos <<- 1
-            lev <<- 0.4
-          }
-        })
-      }
-      # add CNV overlay
-      cnvcolour<-ifelse(cnvType=="deletion", '#FF000044', '#00FF0044')
-      rect(chromStart, 0, chromEnd, 1, col = cnvcolour,
-        border=cnvcolour, lwd=5)
-    } # end CNV loop
-  } # end any CNV
+  # #### CONTINUE HERE ####
+  # #### CONTINUE HERE ####
+  # #### CONTINUE HERE ####
+  # #### CONTINUE HERE ####
+
+  # #
+  # # plot gene data (take annotation from first result)
+  # #
+  # par(mar = c(2, 4, 0, 2))
+  # plot(x = NA, y = NA, ylim = c(0, 1), xlim = xlim,
+  #   yaxt = "n", ylab = "", xlab = "", xaxt = "n")
+  
+  # # axis ticks at bottom
+  # my.pos <- axTicks(side = 1)
+  # axis(side = 1, at = my.pos, labels = as.integer(my.pos))
+
+      # # get exons within range of plot
+      # selected <- which(anno[[1]]$chromosome == chrom & anno[[1]]$start >=
+      #     xlim[1] & anno[[1]]$end <= xlim[2])
+      # selected.2 <- max(min(selected) - 1, 1):min(max(selected) +
+      #     1, nrow(anno[[1]]))
+      # exon.array <- anno[[1]][selected.2, , drop = FALSE]
+      # exon.array$short.name <- gsub(exon.array$name, pattern = "-.*", replacement = "")
+      # if (nrow(exon.array) > 1) {
+      #   if (exon.array$short.name[1] != exon.array$short.name[2]) {
+      #     exon.array <- exon.array[-1, ]
+      #   }
+      #   if (nrow(exon.array) > 1 && (exon.array$short.name[nrow(exon.array)] !=
+      #     exon.array$short.name[nrow(exon.array) - 1])) {
+      #     exon.array <- exon.array[-nrow(exon.array),]
+      #   }
+      # }
+      # exon.array$start.gene <- tapply(INDEX = exon.array$short.name,
+      #     exon.array$start, FUN = min)[exon.array$short.name]
+      # exon.array$middle <- 0.5 * (exon.array$start + exon.array$end)
+      # # print exons
+      # if (nrow(exon.array) >= 1) {
+      #   pos <- 1
+      #   lev <- 0.4
+      #   arr <- by(exon.array, exon.array$start.gene, FUN = function(x) {
+      #     my.x <- range(x$middle)
+      #     lines(x = my.x, y = c(lev, lev))
+      #     my.x <- mean(range(x$middle))
+      #     if (my.x < xlim[1]) my.x <- xlim[1]
+      #     if (my.x > xlim[2]) my.x <- xlim[2]
+      #     # gene name
+      #     text(x = my.x, y = ifelse(lev == 0.6, 0.7, 0.3),
+      #       labels = x$short.name[1], pos = pos, cex = 0.5)
+      #     # exon ticks
+      #     for (i in 1:nrow(x)) {
+      #       lines(x = c(x$middle[i], x$middle[i]), y = c(lev - 0.1, lev + 0.1))
+      #     }
+      #     if (pos == 1) {
+      #       pos <<- 3
+      #       lev <<- 0.6
+      #     }
+      #     else {
+      #       pos <<- 1
+      #       lev <<- 0.4
+      #     }
+      #   })
+      # }
+      # # add CNV overlay
+      # cnvcolour<-ifelse(cnvType=="deletion", '#FF000044', '#00FF0044')
+      # rect(chromStart, 0, chromEnd, 1, col = cnvcolour,
+      #   border=cnvcolour, lwd=5)
+
   par(.pardefault) # restore plot environment
 }
 
@@ -343,7 +276,7 @@ cnvDetails<-function() {
     cat("\\subsubsection*{CNV\\_", c, " (", gene_symbol, ")}\n", sep="")
 
     # plot CNV
-    # cnvPlot(cna_detail[[c]])
+    cnvPlot(cna_detail[[c]], gene_symbol)
 
     # subset to CNV rows and relevant columns
     cnv_probes_sanitized <- cna_detail[[c]][which(cna_detail[[c]]$marked_cnv), c(2, 4, 5, 9, 11, 10)]
