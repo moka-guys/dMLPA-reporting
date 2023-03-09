@@ -1,6 +1,6 @@
 VERSION
 .DS_Store
-.RData
+*.RData
 .Rhistory
 *.tex
 *.pdf
