@@ -215,34 +215,33 @@ cnvPlot <- function(cnv, plot_title="", extend=1000) {
   # calclate approximate exon locations/boundaries (for visualisation only)
   #
   exons <- tibble(name = character(), start = integer(), end = integer())
-  slop <- diff(xlim) * 0.02
+  slop <- diff(xlim) * 0.01
   for (x in unique(cnv$Exon)) {
     exonStart <- min(cnv[cnv$Exon == x, "PosEst"])
     exonEnd <- max(cnv[cnv$Exon == x, "PosEst"])
     exonName <- x
     # spread slightly if single probe for better visualisation
-    if (exonStart == exonEnd) {
+    # if (exonStart == exonEnd) {
       exonStart <- exonStart - ifelse(nrow(exons)>0, min(exonStart - exons[nrow(exons),"end"], slop), slop)
       exonEnd <- exonEnd + slop
-    }
+    # }
     exons <- exons %>% add_row(tibble_row(name = as.character(exonName), start = exonStart, end = exonEnd))
   }
 
   # plot exons
   if (nrow(exons) >= 1) {
     lev <- 0.4
+    wig <- 0.1
     # # plot gene
-    # my.x <- range(x$middle)
-    lines(x = my.x, y = c(lev, lev))
+    lines(x = c(min(cnv$PosKb)*1000, max(cnv$PosKb)*1000), y = rep(lev + wig, 2))
     # # gene name
-    # text(x = my.x, y = ifelse(lev == 0.6, 0.7, 0.3),
-    #   labels = x$short.name[1], pos = pos, cex = 0.5)
+    text(x = exons$end, y = c(lev + (3 * wig), lev - wig), labels = exons$name, pos = 4, cex = 0.5)
     # plot exons
     for (e in 1:nrow(exons)) {
       # exon ticks
-      vertical_offset <- 0.2 * (e %% 2)
+      vertical_offset <- 2 * wig * (e %% 2)
       col = ifelse(e %% 2 == 0, 'black', 'red')
-      rect(exons[e,"start"], lev - 0.1 + vertical_offset, exons[e,"end"], lev + 0.1 + vertical_offset,
+      rect(exons[e,"start"], lev - wig + vertical_offset, exons[e,"end"], lev + wig + vertical_offset,
         col = col, border = NA)
     }
   }
