@@ -131,7 +131,8 @@ cnvPlot <- function(cnv, plot_title="", extend=1000) {
   # make a tibble and rename ratio column
   cnv <- rename(as_tibble(cnv), all_of(c("Ratio" = samplename)))
   
-  # add approximate, dislocated position in bases (spread probes with same PosKb slightly)
+  # add adjusted position in bases
+  # (spread probes with same PosKb slightly for visualisation)
   colocated_probe_offset<-1000/max(table(cnv$PosKb))
   adjusted_positions<-c(-1,diff(cnv$PosKb))==0
   offset_multiplier<-0
@@ -199,72 +200,56 @@ cnvPlot <- function(cnv, plot_title="", extend=1000) {
   rect(cnvStart, ylim[1], cnvEnd, ylim[2],
     col = cnvcolour, border=cnvcolour, lwd=5)
 
-  # #### CONTINUE HERE ####
-  # #### CONTINUE HERE ####
-  # #### CONTINUE HERE ####
-  # #### CONTINUE HERE ####
-
-  # #
-  # # plot gene data (take annotation from first result)
-  # #
-  # par(mar = c(2, 4, 0, 2))
-  # plot(x = NA, y = NA, ylim = c(0, 1), xlim = xlim,
-  #   yaxt = "n", ylab = "", xlab = "", xaxt = "n")
+  #
+  # plot gene data (take annotation from first result)
+  #
+  par(mar = c(2, 4, 0, 2))
+  plot(x = NA, y = NA, ylim = c(0, 1), xlim = xlim,
+    yaxt = "n", ylab = "", xlab = "", xaxt = "n")
   
-  # # axis ticks at bottom
-  # my.pos <- axTicks(side = 1)
-  # axis(side = 1, at = my.pos, labels = as.integer(my.pos))
+  # axis ticks at bottom
+  my.pos <- axTicks(side = 1)
+  axis(side = 1, at = my.pos, labels = as.integer(my.pos))
 
-      # # get exons within range of plot
-      # selected <- which(anno[[1]]$chromosome == chrom & anno[[1]]$start >=
-      #     xlim[1] & anno[[1]]$end <= xlim[2])
-      # selected.2 <- max(min(selected) - 1, 1):min(max(selected) +
-      #     1, nrow(anno[[1]]))
-      # exon.array <- anno[[1]][selected.2, , drop = FALSE]
-      # exon.array$short.name <- gsub(exon.array$name, pattern = "-.*", replacement = "")
-      # if (nrow(exon.array) > 1) {
-      #   if (exon.array$short.name[1] != exon.array$short.name[2]) {
-      #     exon.array <- exon.array[-1, ]
-      #   }
-      #   if (nrow(exon.array) > 1 && (exon.array$short.name[nrow(exon.array)] !=
-      #     exon.array$short.name[nrow(exon.array) - 1])) {
-      #     exon.array <- exon.array[-nrow(exon.array),]
-      #   }
-      # }
-      # exon.array$start.gene <- tapply(INDEX = exon.array$short.name,
-      #     exon.array$start, FUN = min)[exon.array$short.name]
-      # exon.array$middle <- 0.5 * (exon.array$start + exon.array$end)
-      # # print exons
-      # if (nrow(exon.array) >= 1) {
-      #   pos <- 1
-      #   lev <- 0.4
-      #   arr <- by(exon.array, exon.array$start.gene, FUN = function(x) {
-      #     my.x <- range(x$middle)
-      #     lines(x = my.x, y = c(lev, lev))
-      #     my.x <- mean(range(x$middle))
-      #     if (my.x < xlim[1]) my.x <- xlim[1]
-      #     if (my.x > xlim[2]) my.x <- xlim[2]
-      #     # gene name
-      #     text(x = my.x, y = ifelse(lev == 0.6, 0.7, 0.3),
-      #       labels = x$short.name[1], pos = pos, cex = 0.5)
-      #     # exon ticks
-      #     for (i in 1:nrow(x)) {
-      #       lines(x = c(x$middle[i], x$middle[i]), y = c(lev - 0.1, lev + 0.1))
-      #     }
-      #     if (pos == 1) {
-      #       pos <<- 3
-      #       lev <<- 0.6
-      #     }
-      #     else {
-      #       pos <<- 1
-      #       lev <<- 0.4
-      #     }
-      #   })
-      # }
-      # # add CNV overlay
-      # cnvcolour<-ifelse(cnvType=="deletion", '#FF000044', '#00FF0044')
-      # rect(chromStart, 0, chromEnd, 1, col = cnvcolour,
-      #   border=cnvcolour, lwd=5)
+  #
+  # calclate approximate exon locations/boundaries (for visualisation only)
+  #
+  exons <- tibble(name = character(), start = integer(), end = integer())
+  slop <- diff(xlim) * 0.02
+  for (x in unique(cnv$Exon)) {
+    exonStart <- min(cnv[cnv$Exon == x, "PosEst"])
+    exonEnd <- max(cnv[cnv$Exon == x, "PosEst"])
+    exonName <- x
+    # spread slightly if single probe for better visualisation
+    if (exonStart == exonEnd) {
+      exonStart <- exonStart - ifelse(nrow(exons)>0, min(exonStart - exons[nrow(exons),"end"], slop), slop)
+      exonEnd <- exonEnd + slop
+    }
+    exons <- exons %>% add_row(tibble_row(name = as.character(exonName), start = exonStart, end = exonEnd))
+  }
+
+  # plot exons
+  if (nrow(exons) >= 1) {
+    lev <- 0.4
+    # # plot gene
+    # my.x <- range(x$middle)
+    lines(x = my.x, y = c(lev, lev))
+    # # gene name
+    # text(x = my.x, y = ifelse(lev == 0.6, 0.7, 0.3),
+    #   labels = x$short.name[1], pos = pos, cex = 0.5)
+    # plot exons
+    for (e in 1:nrow(exons)) {
+      # exon ticks
+      vertical_offset <- 0.2 * (e %% 2)
+      col = ifelse(e %% 2 == 0, 'black', 'red')
+      rect(exons[e,"start"], lev - 0.1 + vertical_offset, exons[e,"end"], lev + 0.1 + vertical_offset,
+        col = col, border = NA)
+    }
+  }
+  # add CNV overlay to exon
+  # cnvcolour<-ifelse(cnvType=="deletion", '#FF000044', '#00FF0044')
+  # rect(chromStart, 0, chromEnd, 1, col = cnvcolour,
+  #   border=cnvcolour, lwd=5)
 
   par(.pardefault) # restore plot environment
 }

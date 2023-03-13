@@ -10,7 +10,8 @@ required_packages <- c(
   "kableExtra",
   "Rsamtools",
   "stringr",
-  "dplyr")
+  "dplyr",
+  "tibble")
 
 # load packages or install from CRAN
 options(menu.graphics = FALSE)
