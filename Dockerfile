@@ -1,5 +1,5 @@
 # Base Image
-FROM rstudio/r-base:4.2.1-focal
+FROM r-base:4.2.1
 
 # Metadata
 LABEL base.image="r-base:4.2.1"
@@ -20,10 +20,16 @@ RUN apt-get --yes install \
 	libcurl4-openssl-dev \
 	time \
 	libpoppler-cpp-dev \
-	texlive \
 	libssl-dev \
 	libfontconfig1-dev \
 	libxml2-dev
+
+# install livetex (APT is not always compatible with current remote repository)
+RUN cd /tmp && \
+	wget -O- https://mirror.ctan.org/systems/texlive/tlnet/install-tl-unx.tar.gz | tar xvfz - && \
+	cd install-tl-* && \
+	perl ./install-tl --no-interaction --scheme=small
+ENV PATH="/usr/local/texlive/2023/bin/x86_64-linux:${PATH}"
 
 # LateX packages
 RUN tlmgr init-usertree
