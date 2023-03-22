@@ -10,7 +10,7 @@ IMG_VERSIONED := $(IMG):$(BUILD)
 IMG_LATEST    := $(IMG):latest
 IMG_DEV       := $(IMG):dev
 
-.PHONY: push build version cleanbuild
+.PHONY: push build version cleanbuild devbuild test
 
 push: build
 	docker push $(IMG_VERSIONED)
@@ -32,3 +32,8 @@ version:
 
 cleanbuild:
 	docker buildx build --platform linux/amd64 --no-cache -t $(IMG_VERSIONED) .
+
+test: test/test.pdf
+
+test/test.pdf:
+	docker run --rm -v $(PWD)/test:/test $(IMG_DEV) /test/test.tex
