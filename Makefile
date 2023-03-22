@@ -36,4 +36,4 @@ cleanbuild:
 test: test/test.pdf
 
 test/test.pdf:
-	docker run --rm -v $(PWD)/test:/test $(IMG_DEV) /test/test.tex
+	docker run --rm -v $(PWD)/test:/test $(IMG_DEV) /test/test.xlsx /test/test.pdf
