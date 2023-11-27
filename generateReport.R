@@ -1,17 +1,16 @@
 # R script to generate dMLPA reports from filtered excel files
 #
-# ENSURE PACKAGES ARE INSTALLED AND LOAD LIBRARIES
+# ENSURE PACKAGES ARE INSTALLED AND LOAD LIBRARIES TODO check if GenomicRanges, xtable, kableExtra and Rsamtools packages are required
 #
 required_packages <- c(
-  "GenomicRanges",
   "readxl",
   "xtable",
   "knitr",
   "kableExtra",
-  "Rsamtools",
   "stringr",
   "dplyr",
-  "tibble")
+  "tibble",
+  "tidyr")
 
 # load packages or install from CRAN
 options(menu.graphics = FALSE)
@@ -31,9 +30,9 @@ script <- unlist(strsplit(cmd[which(substr(cmd, 1, 7) == "--file=")], "="))[2]
 scriptdir <- normalizePath(dirname(script))
 
 args <- commandArgs(trailingOnly = TRUE)
-infile <- args[1]
-outfile <- args[2]
-annfile <- args[3]
+infile <- args[1] # output from digital MLPA script, .xlsx file format
+outfile <- args[2] # name of file to output TODO consider how this will be used when called from the app
+annfile <- args[3] # MLPA probe information file
 
 
 # define version string (this is imported from the docker image if available)
@@ -50,24 +49,38 @@ results <- results %>% mutate(Exon = as.integer(Exon))
 samplename <- colnames(metadata)[2]
 panel <- stringr::str_extract(samplename, "Pan[0-9]+")
 
+
 #
-# custom annotations
-# (could be used to add own annotations, eg known CNVs, DGV, etc)
+# get probe position information from MLPA probe information sheet
+# extract chr, start and end positions from probe info sheet
+# conver probe positions to integers
 #
 annotations <- NA
+# if (file.exists(annfile)) {  #TODO remove this once the alternative below is tested
+#   message("Reading MLPA probe information file...")
+#   probe_file <- annfile
+#   probe_info <- readxl::read_excel(probe_file, sheet = "probe_info")
+#   probe_coords <- probe_info %>% separate("Mapview (hg38)a", c("chrom", "coords"), ":")
+#   probe_coords <- probe_coords %>% separate("coords", c("pos_start", "pos_end"), "-") 
+#   probe_coords <- probe_coords %>% mutate(pos_start = as.integer(pos_start))
+#   probe_coords <- probe_coords %>% mutate(pos_end = as.integer(pos_end))
+#   probe_coords <- probe_coords %>% select("Probe number", chrom, pos_start, pos_end)
+# }
 if (file.exists(annfile)) {
-  message("Reading annotations...")
-  anntable <- read.table(annfile, header = FALSE)
-  annotations <- with(anntable,
-    GRanges(seqnames = V1, IRanges(start = V2 + 1, end = V3, names = V4),
-      names = gsub("_", " ", V4)))
+  message("Reading MLPA probe information file...")
+  
+  probe_coords <- readxl::read_excel(annfile, sheet = "probe_info") %>%
+    separate("Mapview (hg38)a", c("chrom", "pos_start", "pos_end"), ":|-") %>%
+    mutate(across(c(pos_start, pos_end), as.integer)) %>%
+    select("Probe number", chrom, pos_start, pos_end)
 }
- 
 #
 # Create summary table of CNVs (from results table, with own annotations)
 #
+# combine probe position information with results
 # remove control regions ang get gene list
-results_clinical <- results[which(results[["Probe type"]] != "CTRL"), ]
+results_probes <- left_join(results,probe_coords, by = "Probe number")
+results_clinical <- results_probes[which(results[["Probe type"]] != "CTRL"), ]
 genes <- unique(results_clinical[["Gene"]])
 gene_list <- paste(genes, collapse = ", ")
 
@@ -85,28 +98,16 @@ message(paste("          Panel:", panel))
 message(paste("          Genes:", gene_list))
 message(paste(" ---------------------------------------------------"))
 
-# define cutoffs for CNA ([x[)
+# define cutoffs for MLPA DQ values. only autosomal genes considered ("normal" == 2 copies)
 cnchange <- list(
-  down = c(0, 0.8),
-  # neutral = c(0.8, 1.2),
-  up = c(1.2, Inf)
+  RefToScientist1 = c(0, 0.4),
+  HetDel = c(0.4, 0.6), # theoretical value 0.5
+  RefToScientist2 = c(0.6, 0.8),
+#  normal = c(0.8, 1.2), # theoretical value 1
+  RefToScientist3 = c(1.2, 1.4),
+  HetDup = c(1.4, 1.6), # theoretical value 1.5
+  RefToScientist4 = c(1.6, Inf)
   )
-
-# split 05-123,232 into two columns (chrom, pos in kb)
-results_coordinates <- data.frame(
-  t(sapply(results_clinical[["Mapview (hg38) in kb"]],
-      function(x) unlist(strsplit(x, "-")))))
-colnames(results_coordinates) <- c("Chrom", "PosKb")
-results_coordinates <- transform(results_coordinates,
-  Chrom = sub("^0", "", Chrom), PosKb = as.numeric(sub(",", "", PosKb)))
-
-# merge coordiante columns with results
-results_clinical_rownames <- rownames(results_clinical)
-results_clinical <- cbind(results_clinical, as_tibble(results_coordinates))
-rownames(results_clinical) <- results_clinical_rownames
-
-# # rename column with sample name
-# results <- rename(results, all_of(c("Copy Number Change" = samplename)))
 
 # calculate CNA with set cutoffs and save data per gene for plotting
 cna_summary <- data.frame()
@@ -132,8 +133,9 @@ for (gene in genes) {
       cnv_lines <- as_tibble(cnv_list[[cnv_index]])
       start_exon <- min(cnv_lines[["Exon"]])
       end_exon <- max(cnv_lines[["Exon"]])
-      start_pos <- min(cnv_lines[["PosKb"]])
-      end_pos <- max(cnv_lines[["PosKb"]])
+      start_pos <- min(cnv_lines[["pos_start"]])
+      end_pos <- max(cnv_lines[["pos_end"]])
+      # calc mean and report to 3 significant figures
       copy_change_mean <- round(mean(cnv_lines[[samplename]]), 3)
       copy_change_sd <- round(sd(cnv_lines[[samplename]]), 3)
       copy_number_est <- round(mean(
@@ -142,12 +144,12 @@ for (gene in genes) {
       # create an aggregate line
       cnv_aggregate <- data.frame(
         Gene = unique(cnv_lines[["Gene"]]),
-        Direction = direction,
+        Copy.Number = direction,
         Exons = ifelse(start_exon != end_exon,
           paste(start_exon, end_exon, sep = "-"), start_exon),
-        Chrom = unique(cnv_lines[["Chrom"]]),
-        Coordinates.kb = paste(start_pos, end_pos, sep = "-"),
-        Copy.Number.Change = paste(copy_change_mean, copy_change_sd, sep = "±"),
+        Chrom = unique(cnv_lines[["chrom"]]),
+        Probe.Coordinates = paste(start_pos, end_pos, sep = "-"),
+        Mean.Dosage.Quotient = paste(copy_change_mean, copy_change_sd, sep = "+/-"),
         Estimated.Copy.Number = copy_number_est,
         Supporting.Probes = nrow(cnv_lines)
       )
